@@ -127,20 +127,6 @@ bazel_dep(name = "googletest", version = "1.17.0.bcr.1")
 bazel_dep(name = "google_benchmark", version = "1.9.4")
 bazel_dep(name = "rapidjson", version = "1.1.0")
 bazel_dep(name = "jemalloc", version = "5.3.0-bcr.alpha.4")
-bazel_dep(name = "libatomic", version = "1.0")
-local_path_override(
-    module_name = "libatomic",
-    path = "third_party/libatomic",
-)
-
-bazel_dep(name = "rules_boost", repo_name = "com_github_nelhage_rules_boost")
-archive_override(
-    module_name = "rules_boost",
-    strip_prefix = "rules_boost-master",
-    urls = ["https://github.com/nelhage/rules_boost/archive/refs/heads/master.tar.gz"],
-)
-
-bazel_dep(name = "boost.program_options", version = "1.87.0")
 bazel_dep(name = "score_communication", version = "0.1.2")
 git_override(
     module_name = "score_communication",
@@ -155,4 +141,13 @@ git_override(
     module_name = "score_baselibs",
     commit = "3c65b223e9f516f95935bb4cd2e83d6088ca016f",
     remote = "https://github.com/eclipse-score/baselibs.git",
+)
+
+# Rust dependencies
+
+bazel_dep(name = "score_baselibs_rust", version = "0.0.1")
+git_override(
+    module_name = "score_baselibs_rust",
+    commit = "fd17433a63b0f3839a4436cb3748907d93503ccd",
+    remote = "https://github.com/eclipse-score/baselibs_rust.git",
 )

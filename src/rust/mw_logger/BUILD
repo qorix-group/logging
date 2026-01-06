@@ -11,7 +11,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # *******************************************************************************
 
-load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
 
 cc_library(
@@ -25,14 +25,13 @@ cc_library(
 )
 
 rust_library(
-    name = "mw_log_subscriber",
+    name = "mw_logger",
     srcs = glob(["src/**/*.rs"]),
-    crate_name = "mw_log_subscriber",
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [
         ":librust_cpp_log_adapter",
-        "@score_baselibs//score/mw/log/rust:log",
+        "@score_baselibs_rust//src/log/mw_log",
     ],
 )
 
@@ -43,14 +42,20 @@ rust_binary(
         "examples/config/logging.json",
     ],
     edition = "2021",
-    rustc_flags = [
-        "-Clink-arg=-lstdc++",
-        "-Clink-arg=-lm",
-        "-Clink-arg=-lc",
-    ],
+    rustc_flags = select({
+        "@platforms//os:qnx": [
+            "-Clink-arg=-lc++",
+            "-Clink-arg=-lm",
+        ],
+        "//conditions:default": [
+            "-Clink-arg=-lstdc++",
+            "-Clink-arg=-lm",
+            "-Clink-arg=-lc",
+        ],
+    }),
     visibility = ["//visibility:public"],
     deps = [
-        ":mw_log_subscriber",
-        "@score_baselibs//score/mw/log/rust:log",
+        ":mw_logger",
+        "@score_baselibs_rust//src/log/mw_log",
     ],
 )
