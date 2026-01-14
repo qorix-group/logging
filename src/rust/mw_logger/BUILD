@@ -14,9 +14,22 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
 
+config_setting(
+    name = "x86_64-linux",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+)
+
 cc_library(
     name = "librust_cpp_log_adapter",
     srcs = ["src/rust_cpp_log_adapter.cpp"],
+    # C++/Rust interface objects must share layout.
+    defines = select({
+        ":x86_64-linux": ["x86_64_linux"],
+        "//conditions:default": [],
+    }),
     visibility = ["//visibility:private"],
     deps = [
         "//score/mw/log/detail/common:recorder_factory",
@@ -27,6 +40,11 @@ cc_library(
 rust_library(
     name = "mw_logger",
     srcs = glob(["src/**/*.rs"]),
+    # C++/Rust interface objects must share layout.
+    crate_features = select({
+        ":x86_64-linux": ["x86_64_linux"],
+        "//conditions:default": [],
+    }),
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [

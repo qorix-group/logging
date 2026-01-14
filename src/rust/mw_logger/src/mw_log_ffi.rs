@@ -11,10 +11,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+use core::alloc::Layout;
+use core::cmp::min;
 use core::ffi::c_char;
-use std::ffi::CString;
 
 /// Represents severity of a log message.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum LogLevel {
     #[allow(dead_code)]
@@ -68,166 +70,320 @@ impl From<LogLevel> for mw_log::LevelFilter {
     }
 }
 
-/// Opaque type representing `LogStream`.
+/// Name of the context.
+/// Max 4 bytes containing ASCII characters.
+struct Context {
+    data: [c_char; 4],
+    size: usize,
+}
+
+impl Context {
+    pub fn from(context: &str) -> Self {
+        // Disallow non-ASCII strings.
+        // ASCII characters are single byte in UTF-8.
+        if !context.is_ascii() {
+            panic!("Provided context contains non-ASCII characters: {context}");
+        }
+
+        // Get number of characters.
+        let size = min(context.len(), 4);
+
+        // Copy data into array.
+        let mut data: [c_char; 4] = [0; 4];
+        unsafe {
+            core::ptr::copy_nonoverlapping(context.as_ptr(), data.as_mut_ptr() as *mut u8, size);
+        }
+
+        Self { data, size }
+    }
+}
+
+/// Opaque type representing `Recorder`.
 #[repr(C)]
-pub struct LogStreamPtr {
+struct RecorderPtr {
     _private: [u8; 0],
 }
 
-pub struct LogStream {
-    ptr: *mut LogStreamPtr,
+/// Recorder instance.
+pub(crate) struct Recorder {
+    inner: *mut RecorderPtr,
 }
 
-impl LogStream {
-    pub fn new(ptr: *mut LogStreamPtr) -> Self {
-        Self { ptr }
+impl Recorder {
+    pub fn new() -> Self {
+        let inner = unsafe { recorder_get() };
+        Self { inner }
     }
 
-    pub fn log_bool(&self, v: &bool) {
-        unsafe { log_stream_log_bool(self.ptr, v as *const bool) }
-    }
-
-    pub fn log_f32(&self, v: &f32) {
-        unsafe { log_stream_log_f32(self.ptr, v as *const f32) }
-    }
-
-    pub fn log_f64(&self, v: &f64) {
-        unsafe { log_stream_log_f64(self.ptr, v as *const f64) }
-    }
-
-    pub fn log_string(&self, v: &str) {
-        let v_cstr = CString::new(v).unwrap();
-        let v_cchar = v_cstr.as_ptr() as *const c_char;
-        let size = v.len();
-        unsafe { log_stream_log_string(self.ptr, v_cchar, size) }
-    }
-
-    pub fn log_i8(&self, v: &i8) {
-        unsafe { log_stream_log_i8(self.ptr, v as *const i8) }
-    }
-
-    pub fn log_i16(&self, v: &i16) {
-        unsafe { log_stream_log_i16(self.ptr, v as *const i16) }
-    }
-
-    pub fn log_i32(&self, v: &i32) {
-        unsafe { log_stream_log_i32(self.ptr, v as *const i32) }
-    }
-
-    pub fn log_i64(&self, v: &i64) {
-        unsafe { log_stream_log_i64(self.ptr, v as *const i64) }
-    }
-
-    pub fn log_u8(&self, v: &u8) {
-        unsafe { log_stream_log_u8(self.ptr, v as *const u8) }
-    }
-
-    pub fn log_u16(&self, v: &u16) {
-        unsafe { log_stream_log_u16(self.ptr, v as *const u16) }
-    }
-
-    pub fn log_u32(&self, v: &u32) {
-        unsafe { log_stream_log_u32(self.ptr, v as *const u32) }
-    }
-
-    pub fn log_u64(&self, v: &u64) {
-        unsafe { log_stream_log_u64(self.ptr, v as *const u64) }
-    }
-
-    pub fn log_bin8(&self, v: &u8) {
-        unsafe { log_stream_log_bin8(self.ptr, v as *const u8) }
-    }
-
-    pub fn log_bin16(&self, v: &u16) {
-        unsafe { log_stream_log_bin16(self.ptr, v as *const u16) }
-    }
-
-    pub fn log_bin32(&self, v: &u32) {
-        unsafe { log_stream_log_bin32(self.ptr, v as *const u32) }
-    }
-
-    pub fn log_bin64(&self, v: &u64) {
-        unsafe { log_stream_log_bin64(self.ptr, v as *const u64) }
-    }
-
-    pub fn log_hex8(&self, v: &u8) {
-        unsafe { log_stream_log_hex8(self.ptr, v as *const u8) }
-    }
-
-    pub fn log_hex16(&self, v: &u16) {
-        unsafe { log_stream_log_hex16(self.ptr, v as *const u16) }
-    }
-
-    pub fn log_hex32(&self, v: &u32) {
-        unsafe { log_stream_log_hex32(self.ptr, v as *const u32) }
-    }
-
-    pub fn log_hex64(&self, v: &u64) {
-        unsafe { log_stream_log_hex64(self.ptr, v as *const u64) }
+    pub fn log_level(&self, context: &str) -> LogLevel {
+        let context = Context::from(context);
+        unsafe { recorder_log_level(self.inner, context.data.as_ptr(), context.size) }
     }
 }
 
-impl Drop for LogStream {
+/// Opaque type representing `SlotHandle`.
+#[cfg(feature = "x86_64_linux")]
+#[repr(C, align(8))]
+pub(crate) struct SlotHandlePtr {
+    _private: [u8; 24],
+}
+
+impl SlotHandlePtr {
+    pub fn layout_rust() -> Layout {
+        Layout::new::<Self>()
+    }
+
+    pub fn layout_cpp() -> Layout {
+        let size = unsafe { slot_handle_size() };
+        let align = unsafe { slot_handle_alignment() };
+        Layout::from_size_align(size, align).expect("Invalid SlotHandle layout, size: {size}, alignment: {align}")
+    }
+}
+
+/// Single log message stream.
+pub struct LogStream<'a> {
+    recorder: &'a Recorder,
+    slot: Option<SlotHandlePtr>,
+}
+
+impl<'a> LogStream<'a> {
+    pub fn new(recorder: &'a Recorder, context: &str, log_level: LogLevel) -> Self {
+        // Create context object.
+        let context = Context::from(context);
+
+        // Start record.
+        // `SlotHandle` is allocated on stack.
+        let mut slot_buffer = SlotHandlePtr { _private: [0; 24] };
+        let slot_result = unsafe {
+            recorder_start(
+                recorder.inner,
+                context.data.as_ptr(),
+                context.size,
+                log_level,
+                &mut slot_buffer as *mut SlotHandlePtr,
+            )
+        };
+
+        // Store buffer only if acquired.
+        let slot = if !slot_result.is_null() {
+            Some(slot_buffer)
+        } else {
+            None
+        };
+
+        Self { recorder, slot }
+    }
+
+    pub fn log_bool(&mut self, v: &bool) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_bool(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const bool);
+            }
+        }
+    }
+
+    pub fn log_f32(&mut self, v: &f32) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_f32(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const f32);
+            }
+        }
+    }
+
+    pub fn log_f64(&mut self, v: &f64) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_f64(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const f64);
+            }
+        }
+    }
+
+    pub fn log_string(&mut self, v: &str) {
+        // Disallow non-ASCII strings.
+        if !v.is_ascii() {
+            panic!("Provided string contains non-ASCII characters: {v}");
+        }
+
+        // Get string as pointer and size.
+        // ASCII characters are single byte in UTF-8.
+        let v_ptr = v.as_ptr() as *const c_char;
+        let v_size = v.len();
+
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_string(self.recorder.inner, slot as *mut SlotHandlePtr, v_ptr, v_size);
+            }
+        }
+    }
+
+    pub fn log_i8(&mut self, v: &i8) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_i8(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const i8);
+            }
+        }
+    }
+
+    pub fn log_i16(&mut self, v: &i16) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_i16(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const i16);
+            }
+        }
+    }
+
+    pub fn log_i32(&mut self, v: &i32) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_i32(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const i32);
+            }
+        }
+    }
+
+    pub fn log_i64(&mut self, v: &i64) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_i64(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const i64);
+            }
+        }
+    }
+
+    pub fn log_u8(&mut self, v: &u8) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_u8(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const u8);
+            }
+        }
+    }
+
+    pub fn log_u16(&mut self, v: &u16) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_u16(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const u16);
+            }
+        }
+    }
+
+    pub fn log_u32(&mut self, v: &u32) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_u32(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const u32);
+            }
+        }
+    }
+
+    pub fn log_u64(&mut self, v: &u64) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_u64(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const u64);
+            }
+        }
+    }
+
+    pub fn log_bin8(&mut self, v: &u8) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_bin8(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const u8);
+            }
+        }
+    }
+
+    pub fn log_bin16(&mut self, v: &u16) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_bin16(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const u16);
+            }
+        }
+    }
+
+    pub fn log_bin32(&mut self, v: &u32) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_bin32(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const u32);
+            }
+        }
+    }
+
+    pub fn log_bin64(&mut self, v: &u64) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_bin64(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const u64);
+            }
+        }
+    }
+
+    pub fn log_hex8(&mut self, v: &u8) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_hex8(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const u8);
+            }
+        }
+    }
+
+    pub fn log_hex16(&mut self, v: &u16) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_hex16(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const u16);
+            }
+        }
+    }
+
+    pub fn log_hex32(&mut self, v: &u32) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_hex32(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const u32);
+            }
+        }
+    }
+
+    pub fn log_hex64(&mut self, v: &u64) {
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe {
+                log_hex64(self.recorder.inner, slot as *mut SlotHandlePtr, v as *const u64);
+            }
+        }
+    }
+}
+
+impl Drop for LogStream<'_> {
     fn drop(&mut self) {
-        unsafe { log_stream_destroy(self.ptr) }
-    }
-}
-
-/// Opaque type representing `Logger`.
-#[repr(C)]
-pub struct LoggerPtr {
-    _private: [u8; 0],
-}
-
-pub struct Logger {
-    ptr: *mut LoggerPtr,
-}
-
-impl Logger {
-    pub fn new(context: &str) -> Self {
-        let context_cstr = CString::new(context).unwrap();
-        let logger_ptr = unsafe { logger_create(context_cstr.as_ptr().cast::<c_char>()) };
-        Self { ptr: logger_ptr }
-    }
-
-    pub fn log_level_enabled(&self, log_level: LogLevel) -> bool {
-        unsafe { logger_log_level_enabled(self.ptr, log_level) }
-    }
-
-    pub fn log_level_current(&self) -> LogLevel {
-        unsafe { logger_log_level_current(self.ptr) }
-    }
-
-    pub fn log_stream_create(&self, log_level: LogLevel) -> LogStream {
-        let ptr = unsafe { logger_log_stream_create(self.ptr, log_level) };
-        LogStream::new(ptr)
+        if let Some(slot) = self.slot.as_mut() {
+            unsafe { recorder_stop(self.recorder.inner, slot) }
+        }
     }
 }
 
 unsafe extern "C" {
-    fn logger_create(context: *const c_char) -> *mut LoggerPtr;
-    fn logger_log_level_enabled(logger: *const LoggerPtr, log_level: LogLevel) -> bool;
-    fn logger_log_level_current(logger: *const LoggerPtr) -> LogLevel;
-    fn logger_log_stream_create(logger: *const LoggerPtr, log_level: LogLevel) -> *mut LogStreamPtr;
-    fn log_stream_destroy(log_stream: *mut LogStreamPtr);
-    fn log_stream_log_bool(log_stream: *mut LogStreamPtr, value: *const bool);
-    fn log_stream_log_f32(log_stream: *mut LogStreamPtr, value: *const f32);
-    fn log_stream_log_f64(log_stream: *mut LogStreamPtr, value: *const f64);
-    fn log_stream_log_string(log_stream: *mut LogStreamPtr, value: *const c_char, size: usize);
-    fn log_stream_log_i8(log_stream: *mut LogStreamPtr, value: *const i8);
-    fn log_stream_log_i16(log_stream: *mut LogStreamPtr, value: *const i16);
-    fn log_stream_log_i32(log_stream: *mut LogStreamPtr, value: *const i32);
-    fn log_stream_log_i64(log_stream: *mut LogStreamPtr, value: *const i64);
-    fn log_stream_log_u8(log_stream: *mut LogStreamPtr, value: *const u8);
-    fn log_stream_log_u16(log_stream: *mut LogStreamPtr, value: *const u16);
-    fn log_stream_log_u32(log_stream: *mut LogStreamPtr, value: *const u32);
-    fn log_stream_log_u64(log_stream: *mut LogStreamPtr, value: *const u64);
-    fn log_stream_log_bin8(log_stream: *mut LogStreamPtr, value: *const u8);
-    fn log_stream_log_bin16(log_stream: *mut LogStreamPtr, value: *const u16);
-    fn log_stream_log_bin32(log_stream: *mut LogStreamPtr, value: *const u32);
-    fn log_stream_log_bin64(log_stream: *mut LogStreamPtr, value: *const u64);
-    fn log_stream_log_hex8(log_stream: *mut LogStreamPtr, value: *const u8);
-    fn log_stream_log_hex16(log_stream: *mut LogStreamPtr, value: *const u16);
-    fn log_stream_log_hex32(log_stream: *mut LogStreamPtr, value: *const u32);
-    fn log_stream_log_hex64(log_stream: *mut LogStreamPtr, value: *const u64);
+    fn recorder_get() -> *mut RecorderPtr;
+    fn recorder_start(
+        recorder: *mut RecorderPtr,
+        context: *const c_char,
+        context_size: usize,
+        log_level: LogLevel,
+        slot: *mut SlotHandlePtr,
+    ) -> *mut SlotHandlePtr;
+    fn recorder_stop(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr);
+    fn recorder_log_level(recorder: *const RecorderPtr, context: *const c_char, context_size: usize) -> LogLevel;
+    fn log_bool(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const bool);
+    fn log_f32(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const f32);
+    fn log_f64(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const f64);
+    fn log_string(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const c_char, size: usize);
+    fn log_i8(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const i8);
+    fn log_i16(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const i16);
+    fn log_i32(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const i32);
+    fn log_i64(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const i64);
+    fn log_u8(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const u8);
+    fn log_u16(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const u16);
+    fn log_u32(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const u32);
+    fn log_u64(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const u64);
+    fn log_bin8(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const u8);
+    fn log_bin16(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const u16);
+    fn log_bin32(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const u32);
+    fn log_bin64(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const u64);
+    fn log_hex8(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const u8);
+    fn log_hex16(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const u16);
+    fn log_hex32(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const u32);
+    fn log_hex64(recorder: *mut RecorderPtr, slot: *mut SlotHandlePtr, value: *const u64);
+    fn slot_handle_size() -> usize;
+    fn slot_handle_alignment() -> usize;
 }

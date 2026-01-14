@@ -11,24 +11,54 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-#include "score/mw/log/logger.h"
+#include "score/mw/log/runtime.h"
+#include "score/mw/log/slot_handle.h"
+
+using namespace score::mw::log;
+using namespace score::mw::log::detail;
+
+// Verify configuration.
+#ifdef x86_64_linux
+static_assert(sizeof(SlotHandle) == 24);
+static_assert(alignof(SlotHandle) == 8);
+#else
+#error "Unknown configuration, unable to check layout"
+#endif
 
 extern "C" {
-using namespace score::mw::log;
+/// @brief Get current recorder from runtime.
+/// @return Current recorder.
+Recorder* recorder_get() { return &Runtime::GetRecorder(); }
 
-Logger* logger_create(const char* context) { return &CreateLogger(context); }
-
-bool logger_log_level_enabled(const Logger* logger, LogLevel log_level) {
-    return logger->IsLogEnabled(log_level);
+/// @brief Start recording log message.
+/// @param recorder     Recorder.
+/// @param context      Message context name.
+/// @param context_size Message context name size.
+/// @param log_level    Message log level.
+/// @param slot         `SlotHandle`-sized buffer.
+/// @return `slot` if acquired, `nullptr` otherwise.
+SlotHandle* recorder_start(Recorder* recorder, const char* context, size_t context_size,
+                           LogLevel log_level, SlotHandle* slot) {
+    auto start_result{recorder->StartRecord(std::string_view{context, context_size}, log_level)};
+    if (start_result) {
+        return new (slot) SlotHandle{*start_result};
+    } else {
+        return nullptr;
+    }
 }
 
-LogLevel logger_log_level_current(const Logger* logger) {
+/// @brief Get current log level for provided context.
+/// @param recorder     Recorder.
+/// @param context      Message context name.
+/// @param context_size Message context name size.
+/// @return Current log level.
+LogLevel recorder_log_level(const Recorder* recorder, const char* context, size_t context_size) {
     auto first{static_cast<uint8_t>(LogLevel::kOff)};
     auto last{static_cast<uint8_t>(LogLevel::kVerbose)};
     // Reversed order - `kOff` always seem to report true.
-    for (uint8_t i = last; i > first; --i) {
+    for (uint8_t i{last}; i > first; --i) {
         auto current = static_cast<LogLevel>(i);
-        if (logger->IsLogEnabled(current)) {
+        if (recorder->IsLogEnabled(current, context)) {
             return current;
         }
     }
@@ -37,68 +67,180 @@ LogLevel logger_log_level_current(const Logger* logger) {
     return LogLevel::kOff;
 }
 
-LogStream* logger_log_stream_create(const Logger* logger, LogLevel log_level) {
-    auto log_stream{logger->WithLevel(log_level)};
-    return new LogStream{std::move(log_stream)};
+/// @brief Stop recording log message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+void recorder_stop(Recorder* recorder, SlotHandle* slot) { recorder->StopRecord(*slot); }
+
+/// @brief Add bool value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_bool(Recorder* recorder, SlotHandle* slot, const bool* value) {
+    recorder->Log(*slot, *value);
 }
 
-void log_stream_destroy(LogStream* log_stream) { delete log_stream; }
-
-void log_stream_log_bool(LogStream* log_stream, const bool* value) { *log_stream << *value; }
-
-void log_stream_log_f32(LogStream* log_stream, const float* value) { *log_stream << *value; }
-
-void log_stream_log_f64(LogStream* log_stream, const double* value) { *log_stream << *value; }
-
-void log_stream_log_string(LogStream* log_stream, const char* value, size_t size) {
-    *log_stream << LogString(value, size);
+/// @brief Add f32 value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_f32(Recorder* recorder, SlotHandle* slot, const float* value) {
+    recorder->Log(*slot, *value);
 }
 
-void log_stream_log_i8(LogStream* log_stream, const int8_t* value) { *log_stream << *value; }
-
-void log_stream_log_i16(LogStream* log_stream, const int16_t* value) { *log_stream << *value; }
-
-void log_stream_log_i32(LogStream* log_stream, const int32_t* value) { *log_stream << *value; }
-
-void log_stream_log_i64(LogStream* log_stream, const int64_t* value) { *log_stream << *value; }
-
-void log_stream_log_u8(LogStream* log_stream, const uint8_t* value) { *log_stream << *value; }
-
-void log_stream_log_u16(LogStream* log_stream, const uint16_t* value) { *log_stream << *value; }
-
-void log_stream_log_u32(LogStream* log_stream, const uint32_t* value) { *log_stream << *value; }
-
-void log_stream_log_u64(LogStream* log_stream, const uint64_t* value) { *log_stream << *value; }
-
-void log_stream_log_bin8(LogStream* log_stream, const uint8_t* value) {
-    *log_stream << LogBin8{*value};
+/// @brief Add f64 value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_f64(Recorder* recorder, SlotHandle* slot, const double* value) {
+    recorder->Log(*slot, *value);
 }
 
-void log_stream_log_bin16(LogStream* log_stream, const uint16_t* value) {
-    *log_stream << LogBin16{*value};
+/// @brief Add string value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_string(Recorder* recorder, SlotHandle* slot, const char* value, size_t size) {
+    recorder->Log(*slot, std::string_view{value, size});
 }
 
-void log_stream_log_bin32(LogStream* log_stream, const uint32_t* value) {
-    *log_stream << LogBin32{*value};
+/// @brief Add i8 value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_i8(Recorder* recorder, SlotHandle* slot, const int8_t* value) {
+    recorder->Log(*slot, *value);
 }
 
-void log_stream_log_bin64(LogStream* log_stream, const uint64_t* value) {
-    *log_stream << LogBin64{*value};
+/// @brief Add i16 value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_i16(Recorder* recorder, SlotHandle* slot, const int16_t* value) {
+    recorder->Log(*slot, *value);
 }
 
-void log_stream_log_hex8(LogStream* log_stream, const uint8_t* value) {
-    *log_stream << LogHex8{*value};
+/// @brief Add i32 value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_i32(Recorder* recorder, SlotHandle* slot, const int32_t* value) {
+    recorder->Log(*slot, *value);
 }
 
-void log_stream_log_hex16(LogStream* log_stream, const uint16_t* value) {
-    *log_stream << LogHex16{*value};
+/// @brief Add i64 value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_i64(Recorder* recorder, SlotHandle* slot, const int64_t* value) {
+    recorder->Log(*slot, *value);
 }
 
-void log_stream_log_hex32(LogStream* log_stream, const uint32_t* value) {
-    *log_stream << LogHex32{*value};
+/// @brief Add u8 value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_u8(Recorder* recorder, SlotHandle* slot, const uint8_t* value) {
+    recorder->Log(*slot, *value);
 }
 
-void log_stream_log_hex64(LogStream* log_stream, const uint64_t* value) {
-    *log_stream << LogHex64{*value};
+/// @brief Add u16 value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_u16(Recorder* recorder, SlotHandle* slot, const uint16_t* value) {
+    recorder->Log(*slot, *value);
+}
+
+/// @brief Add u32 value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_u32(Recorder* recorder, SlotHandle* slot, const uint32_t* value) {
+    recorder->Log(*slot, *value);
+}
+
+/// @brief Add u64 value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_u64(Recorder* recorder, SlotHandle* slot, const uint64_t* value) {
+    recorder->Log(*slot, *value);
+}
+
+/// @brief Add 8-bit binary value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_bin8(Recorder* recorder, SlotHandle* slot, const uint8_t* value) {
+    recorder->Log(*slot, LogBin8{*value});
+}
+
+/// @brief Add 16-bit binary value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_bin16(Recorder* recorder, SlotHandle* slot, const uint16_t* value) {
+    recorder->Log(*slot, LogBin16{*value});
+}
+
+/// @brief Add 32-bit binary value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_bin32(Recorder* recorder, SlotHandle* slot, const uint32_t* value) {
+    recorder->Log(*slot, LogBin32{*value});
+}
+
+/// @brief Add 64-bit binary value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_bin64(Recorder* recorder, SlotHandle* slot, const uint64_t* value) {
+    recorder->Log(*slot, LogBin64{*value});
+}
+
+/// @brief Add 8-bit hexadecimal value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_hex8(Recorder* recorder, SlotHandle* slot, const uint8_t* value) {
+    recorder->Log(*slot, LogHex8{*value});
+}
+
+/// @brief Add 16-bit hexadecimal value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_hex16(Recorder* recorder, SlotHandle* slot, const uint16_t* value) {
+    recorder->Log(*slot, LogHex16{*value});
+}
+
+/// @brief Add 32-bit hexadecimal value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_hex32(Recorder* recorder, SlotHandle* slot, const uint32_t* value) {
+    recorder->Log(*slot, LogHex32{*value});
+}
+
+/// @brief Add 64-bit hexadecimal value to message.
+/// @param recorder Recorder.
+/// @param slot     Acquired slot.
+/// @param value    Value.
+void log_hex64(Recorder* recorder, SlotHandle* slot, const uint64_t* value) {
+    recorder->Log(*slot, LogHex64{*value});
+}
+
+/// @brief Get size of `SlotHandle`.
+/// @return Size.
+size_t slot_handle_size() {
+    return sizeof(SlotHandle);
+}
+
+/// @brief Get alignment of `SlotHandle`.
+/// @return Alignment.
+size_t slot_handle_alignment() {
+    return alignof(SlotHandle);
 }
 }
