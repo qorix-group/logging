@@ -27,12 +27,34 @@ bazel_dep(name = "platforms", version = "1.0.0")
 
 # S-CORE process rules
 bazel_dep(name = "score_bazel_platforms", version = "0.0.3")
-bazel_dep(name = "score_docs_as_code", version = "2.2.0")
+
+# bazel_dep(name = "score_docs_as_code", version = "2.3.0")
 bazel_dep(name = "score_tooling", version = "1.0.4")
 bazel_dep(name = "score_rust_policies", version = "0.0.3")
 
-bazel_dep(name = "score_process", version = "1.4.0", dev_dependency = True)
-bazel_dep(name = "score_platform", version = "0.5.1", dev_dependency = True)
+# bazel_dep(name = "score_process", version = "1.4.1", dev_dependency = True)
+# bazel_dep(name = "score_platform", version = "0.5.2", dev_dependency = True)
+
+bazel_dep(name = "score_docs_as_code", version = "2.3.3")
+git_override(
+    module_name = "score_docs_as_code",
+    commit = "f784d4370240cc0eafce779e5c317f6bf8988fb2",
+    remote = "https://github.com/eclipse-score/docs-as-code.git",
+)
+
+bazel_dep(name = "score_platform", version = "0.5.2", dev_dependency = True)
+git_override(
+    module_name = "score_platform",
+    commit = "10a944aceb5d2790e67a965fc4c2d063c95b3347",
+    remote = "https://github.com/eclipse-score/score.git",
+)
+
+bazel_dep(name = "score_process", version = "1.4.2")
+git_override(
+    module_name = "score_process",
+    commit = "da05640b35e35ad050bd4fcec2b66ad35e963841",
+    remote = "https://github.com/eclipse-score/process_description.git",
+)
 
 # Toolchains and extensions
 bazel_dep(name = "score_toolchains_gcc", version = "0.5", dev_dependency = True)
@@ -99,7 +121,7 @@ git_override(
     remote = "https://github.com/eclipse-score/communication.git",
 )
 
-bazel_dep(name = "score_baselibs", version = "0.2.0")
+bazel_dep(name = "score_baselibs", version = "0.2.3")
 git_override(
     module_name = "score_baselibs",
     commit = "3c65b223e9f516f95935bb4cd2e83d6088ca016f",
