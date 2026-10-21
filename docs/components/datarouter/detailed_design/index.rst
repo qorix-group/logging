@@ -253,3 +253,13 @@ part of the headers.
 
    logging_architecture
    shm_apis
+
+
+Inspection Checklist
+====================
+
+The checklist for verification of the detailed design and code can be found here:
+
+.. toctree::
+
+   chklst_impl_inspection
